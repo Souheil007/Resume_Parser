@@ -1,0 +1,4 @@
+dictionnaire
+qui contient content et annotation
+Annotations est une liste qui contient des dictionnaire (chaque dictionnaire est construit par label et points)
+points est une liste (je sais pas pourquoi car elle contient 1 seul element) de dictionnaire (start , end , text)
