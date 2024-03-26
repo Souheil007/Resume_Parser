@@ -15,6 +15,7 @@ from pdfminer.pdfpage import PDFPage
 from pdfminer.pdfparser import PDFSyntaxError
 from nltk.stem import WordNetLemmatizer
 from nltk.corpus import stopwords
+nltk.download('wordnet')
 
 
 def extract_text_from_pdf(pdf_path):
@@ -407,15 +408,11 @@ def extract_mobile_number(text, custom_regex=None):
         return number
 
 
-def extract_skills(nlp_text, noun_chunks, skills_file=None):
-    '''
-    Helper function to extract skills from spacy nlp text
-
-    :param nlp_text: object of `spacy.tokens.doc.Doc`
-    :param noun_chunks: noun chunks extracted from nlp text
-    :return: list of skills extracted
-    '''
-    tokens = [token.text for token in nlp_text if not token.is_stop]
+def extract_skills(text, annotations, skills_file=None):
+    import spacy
+    nlp = spacy.load("en_core_web_sm")
+    doc = nlp(text)
+    tokens = [token.text for token in doc if not token.is_stop]
     if not skills_file:
         data = pd.read_csv(
             os.path.join(os.path.dirname(__file__), 'skills.csv')
@@ -430,27 +427,214 @@ def extract_skills(nlp_text, noun_chunks, skills_file=None):
             skillset.append(token)
 
     # check for bi-grams and tri-grams
-    for token in noun_chunks:
-        token = token.text.lower().strip()
-        if token in skills:
-            skillset.append(token)
-    return [i.capitalize() for i in set([i.lower() for i in skillset])]
+    noun_chunks=[chunk.text.lower().strip() for chunk in doc.noun_chunks]
+    #he4a ilemmlek koll kelmtin mab3a4hom wi9arenhom bel les skills
+    for i in range(len(noun_chunks) - 1):
+        bi_gram = ' '.join(noun_chunks[i:i+2])
+        if bi_gram in skills:
+            skillset.append(bi_gram)
+    
+    #he4a ilemmlek koll 3 kelmet mab3a4hom wi9arenhom bel les skills
+    for i in range(len(noun_chunks) - 2):
+        tri_gram = ' '.join(noun_chunks[i:i+3])
+        if tri_gram in skills:
+            skillset.append(tri_gram)
+    
+    for skill in skillset:
+        annotations.append({
+            "label": ["Skills"],
+            "points": [{
+                "start": text.find(skill),
+                "end": text.find(skill) + len(skill),
+                "text": skill
+            }]
+        })
+def extract_links(text, annotations):
+    # Define the pattern to match URLs
+    url_pattern = r'https?://\S+|www\.\S+'
+
+    # Find all matches of URLs in the text
+    urls = re.findall(url_pattern, text)
+
+    # Extract matched URLs
+    for url in urls:
+        annotations.append({
+            "label": ["Link"],
+            "points": [{
+                "start": text.find(url),
+                "end": text.find(url) + len(url),
+                "text": url
+            }]
+        })
+
+def extract_graduation_year(text, annotations):
+    import spacy
+    from spacy.matcher import Matcher
+    # Load English language model
+    nlp = spacy.load("en_core_web_sm")
+
+    # Define patterns to match graduation years
+    # Example: "graduated in 2010", "graduation year: 2005", "graduated in the year 2022"
+    YEAR_PATTERNS = [
+        [{"LOWER": {"in", "year", "on"}}, {"SHAPE": "dddd"}],  # e.g., "in 2010", "year 2005"
+        [{"LOWER": "graduated"}, {"LOWER": "in"}, {"SHAPE": "dddd"}],  # e.g., "graduated in 2010"
+        [{"LOWER": "graduation"}, {"LOWER": "year"}, {"IS_DIGIT": True, "LENGTH": 4}]  # e.g., "graduation year: 2005"
+    ]
+
+    # Initialize Matcher
+    matcher = Matcher(nlp.vocab)
+
+    # Add the patterns to the Matcher
+    for pattern in YEAR_PATTERNS:
+        matcher.add('YEAR', [pattern])
+
+    # Process the text
+    doc = nlp(text)
+
+    # Perform matching
+    matches = matcher(doc)
+
+    # Extract matched graduation years
+    for _, start, end in matches:
+        span = doc[start:end]
+        graduation_year_text = span.text
+        year_dict = {
+            "label": ["Graduation_Year"],
+            "points": [{
+                "start": span.start_char,
+                "end": span.end_char,
+                "text": graduation_year_text
+            }]
+        }
+        annotations.append(year_dict)           
+
+def extract_degrees(resume_text, annotations):
+    # Define patterns to match degree names
+    degree_patterns = [
+        r"(?i)\b(bachelor|b\.?s\.?|bachelor's)\b",
+        r"(?i)\b(master|ms|m\.?s\.?|master's)\b",
+        r"(?i)\b(doctorate|ph\.?d\.?|doctor's|phd)\b",
+        # Add more patterns as needed
+    ]
+
+    # Find all matches of degree patterns in the text
+    matches = []
+    for pattern in degree_patterns:
+        matches.extend(re.findall(pattern, resume_text))
+
+    # Extract matched degree names
+    for degree in matches:
+        degree_dict = {
+            "label": ["Degree"],
+            "points": [{
+                "start": resume_text.lower().index(degree.lower()),
+                "end": resume_text.lower().index(degree.lower()) + len(degree),
+                "text": degree
+            }]
+        }
+        annotations.append(degree_dict)
+
+def extract_locations(text, annotations):
+    import spacy
+    # Load English language model with NER
+    nlp = spacy.load("en_core_web_sm")
+
+    # Process the text
+    doc = nlp(text)
+
+    # Extract locations
+    for ent in doc.ents:
+        if ent.label_ == "GPE":  # GPE stands for geopolitical entity
+            location_dict = {
+                "label": ["Location"],
+                "points": [{
+                    "start": ent.start_char,
+                    "end": ent.end_char,
+                    "text": ent.text
+                }]
+            }
+            annotations.append(location_dict)
+
+def extract_college_names(text, annotations):
+    import spacy
+    # Load English language model with NER
+    nlp = spacy.load("en_core_web_sm")
+
+    # Process the text
+    doc = nlp(text)
+
+    # Extract college names
+    for ent in doc.ents:
+       #if ent.label_ == "ORG" or ent.label_ == "EDU":  # ORG for organization, EDU for educational institution
+        if ent.label_ == "EDU":  # ORG for organization, EDU for educational institution
+            college_name_dict = {
+                "label": ["College_Name"],
+                "points": [{
+                    "start": ent.start_char,
+                    "end": ent.end_char,
+                    "text": ent.text
+                }]
+            }
+            annotations.append(college_name_dict)
+            
+def extract_years_of_experience(resume_text, annotations):
+    # Define patterns to match years of experience
+    experience_patterns = [
+        r"\b(\d+)\s*years?(\s*\d+\s*months?)?\b",  # Matches "5 years", "3 years 6 months", etc.
+        # Add more patterns as needed
+    ]
+
+    # Find all matches of experience patterns in the text
+    matches = []
+    for pattern in experience_patterns:
+        matches.extend(re.findall(pattern, resume_text))
+
+    # Extract matched years of experience
+    for match in matches:
+        years_of_experience = match[0] if match[0] else "0"  # Extract years if present, otherwise default to "0"
+        months_of_experience = match[1] if len(match) > 1 and match[1] else "0"  # Extract months if present, otherwise default to "0"
+        total_months_of_experience = int(years_of_experience) * 12 + int(months_of_experience)
+
+        experience_dict = {
+            "label": ["Year Of experience"],
+            "points": [{
+                "start": resume_text.lower().index(match[0]),
+                "end": resume_text.lower().index(match[0]) + len(match[0]),
+                "text": f"{years_of_experience} years {months_of_experience} months"
+            }]
+        }
+        annotations.append(experience_dict)
+        
 
 
+def extract_designations(resume_text, annotations):#job titles
+    # Predefined list of job titles
+    # Compile regular expression pattern to match job titles
+    pattern = r'\b(?:' + '|'.join(re.escape(title) for title in cs.job_titles) + r')\b'
+
+    # Find all matches of job titles in the text
+    matches = re.findall(pattern, resume_text, flags=re.IGNORECASE)
+
+    # Extract matched job titles
+    for match in matches:
+        designation_dict = {
+            "label": ["Designation"],
+            "points": [{
+                "start": resume_text.lower().index(match.lower()),
+                "end": resume_text.lower().index(match.lower()) + len(match),
+                "text": match
+            }]
+        }
+        annotations.append(designation_dict)
+'''
 def cleanup(token, lower=True):
     if lower:
         token = token.lower()
     return token.strip()
-
-
+'''
+'''
+#hna te5dem bdes educations tfixihom enti
 def extract_education(nlp_text):
-    '''
-    Helper function to extract education from spacy nlp text
-
-    :param nlp_text: object of `spacy.tokens.doc.Doc`
-    :return: tuple of education degree and year if year if found
-             else only returns education degree
-    '''
     edu = {}
     # Extract education degree
     try:
@@ -471,15 +655,34 @@ def extract_education(nlp_text):
         else:
             education.append(key)
     return education
+'''
 
 
-def extract_experience(resume_text):
-    '''
-    Helper function to extract experience from resume text
+def extract_companies(resume_text, annotations):
+    import spacy
+    # Load English language model with NER
+    nlp = spacy.load("en_core_web_sm")
 
-    :param resume_text: Plain resume text
-    :return: list of experience
-    '''
+    # Process the text
+    doc = nlp(resume_text)
+
+    # Extract companies
+    for ent in doc.ents:
+        if ent.label_ == "ORG":
+            company_dict = {
+                "label": ["Companies worked at"],
+                "points": [{
+                    "start": ent.start_char,
+                    "end": ent.end_char,
+                    "text": ent.text
+                }]
+            }
+            annotations.append(company_dict)
+def extract_experience(resume_text, annotations):
+    import nltk
+    
+    from nltk.corpus import stopwords
+    from nltk.stem import WordNetLemmatizer
     wordnet_lemmatizer = WordNetLemmatizer()
     stop_words = set(stopwords.words('english'))
 
@@ -488,34 +691,35 @@ def extract_experience(resume_text):
 
     # remove stop words and lemmatize
     filtered_sentence = [
-            w for w in word_tokens if w not
-            in stop_words and wordnet_lemmatizer.lemmatize(w)
-            not in stop_words
-        ]
+        w for w in word_tokens if w.lower() not in stop_words and wordnet_lemmatizer.lemmatize(w.lower()) not in stop_words
+    ]
     sent = nltk.pos_tag(filtered_sentence)
 
     # parse regex
     cp = nltk.RegexpParser('P: {<NNP>+}')
     cs = cp.parse(sent)
 
-    # for i in cs.subtrees(filter=lambda x: x.label() == 'P'):
-    #     print(i)
+    # Extract phrases
+    phrases = []
+    for vp in list(cs.subtrees(filter=lambda x: x.label() == 'P')):
+        phrase = " ".join([i[0] for i in vp.leaves() if len(vp.leaves()) >= 2])
+        phrases.append(phrase)
 
-    test = []
-
-    for vp in list(
-        cs.subtrees(filter=lambda x: x.label() == 'P')
-    ):
-        test.append(" ".join([
-            i[0] for i in vp.leaves()
-            if len(vp.leaves()) >= 2])
-        )
-
-    # Search the word 'experience' in the chunk and
-    # then print out the text after it
-    x = [
-        x[x.lower().index('experience') + 10:]
-        for i, x in enumerate(test)
-        if x and 'experience' in x.lower()
+    # Search for 'experience' in the phrases and extract the text after it
+    experiences = [
+        phrase[phrase.lower().index('experience') + 10:].strip()
+        for phrase in phrases
+        if phrase and 'experience' in phrase.lower()
     ]
-    return x
+
+    # Append extracted experiences to annotations
+    for experience in experiences:
+        experience_dict = {
+            "label": ["Experience"],
+            "points": [{
+                "start": resume_text.lower().index('experience') + 10,
+                "end": resume_text.lower().index('experience') + 10 + len(experience),
+                "text": experience
+            }]
+        }
+        annotations.append(experience_dict)
